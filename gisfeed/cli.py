@@ -32,18 +32,16 @@ def cmd_decode(args):
 
     say(f"file: {args.file}")
     say(f"frames: {len(frames)} ({len(frames) / 25:.1f} s), format bttv PAL 2048 x u8, 16 lines per field")
-    ch = decode.Channel(wst.DEFAULT_TAPS, wst.DEFAULT_OFFSET)
+    rows, ch, stats = decode.survey(frames, fmt)
     if args.rows:
         rows = [int(r) for r in args.rows.split(",")]
-        rows, ch, stats = rows, *decode.survey(frames, fmt, ch)[1:]
-    else:
-        rows, ch, stats = decode.survey(frames, fmt, ch)
     for r in sorted(stats):
         a, ok = stats[r]
-        if a:
+        if ok:
             say(f"  row {r:2d} (TV line {fmt.tv_line(r)}): {ok}/{a} sample lines are valid IDL packets")
     say(f"rows used: {rows}")
-    say(f"channel taps: {np.round(ch.taps, 1).tolist()} offset {ch.offset:.1f}")
+    say(f"channel taps: {np.round(ch.taps, 1).tolist()} offset {ch.offset:.1f}, "
+        f"bit alignments tried: {[float(s) for s in ch.shifts]}")
     if not rows:
         say("no IDL data found")
         return
@@ -60,18 +58,25 @@ def cmd_decode(args):
                              progress=progress)
     sys.stderr.write("\n")
     parsed = []
-    n_addr = n_crc = 0
+    n_addr = n_crc = n_fix = 0
     with open(os.path.join(args.out, "packets.t42"), "wb") as t42:
         for f, r, pkt, err in raw:
-            t42.write(pkt[3:45])
             p = idl.parse(pkt) if err < 2 else None
             if p is None:
+                t42.write(pkt[3:45])
                 continue
             n_addr += 1
+            if not p.crc_ok and not args.no_correction:
+                q = idl.correct(pkt)
+                if q is not None:
+                    p = q
+                    n_fix += 1
+            t42.write(p.raw[3:45])
             if p.crc_ok:
                 n_crc += 1
                 parsed.append((f, r, p))
-    say(f"lines with a signal: {len(raw)}, IDL packets: {n_addr}, CRC ok: {n_crc}")
+    say(f"lines with a signal: {len(raw)}, IDL packets: {n_addr}, CRC ok: {n_crc} "
+        f"({n_fix} of them after correcting a short bit error burst)")
     streams = feed.group_streams(parsed)
     for sid, pk in streams.items():
         say(f"  stream channel {sid[0]} SPA {sid[1]} field {2 if sid[2] else 1}: {len(pk)} packets")
@@ -126,6 +131,8 @@ def main(argv=None):
     d.add_argument("--start", type=int, default=0, help="first frame")
     d.add_argument("--stop", type=int, help="frame to stop at")
     d.add_argument("--workers", type=int, help="worker processes (default: all CPUs)")
+    d.add_argument("--no-correction", action="store_true",
+                   help="do not repair packets with a failed CRC")
     args = ap.parse_args(argv)
     if args.cmd == "decode":
         cmd_decode(args)

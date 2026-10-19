@@ -14,6 +14,12 @@ ACTIVE_STD = 15.0  # raw sample std above which a line is considered to carry da
 class Channel:
     taps: np.ndarray
     offset: float
+    shifts: tuple = wst.DEFAULT_SHIFTS
+
+
+def crc_ok(pkt):
+    p = idl.parse(pkt)
+    return p is not None and p.crc_ok
 
 
 def decode_rows(frame_data, rows, sampler, ch):
@@ -22,70 +28,92 @@ def decode_rows(frame_data, rows, sampler, ch):
         line = frame_data[r]
         if line.std() < ACTIVE_STD:
             continue
-        res = wst.decode_line(line, sampler, ch.taps, ch.offset)
+        res = wst.decode_line(line, sampler, ch.taps, ch.offset, ch.shifts, crc_ok)
         if res is not None:
-            yield (r,) + tuple(res)
+            yield (r,) + tuple(res[:4])
 
 
-def survey(frames, fmt, ch, lines_per_row=30, scan_frames=4000):
-    """Finds rows that carry IDL packets and refines the channel model.
+def survey(frames, fmt, lines_per_row=60, scan_frames=8000):
+    """Finds rows that carry the feed and estimates the channel model.
 
-    Looks at up to lines_per_row active lines of every row, spread over the
-    recording. Returns (rows, channel, {row: (decoded, crc ok)})."""
+    1. collects up to lines_per_row active lines of every row, spread over
+       the recording;
+    2. fits a channel to the known packet header of each row; rows whose
+       lines fit well are candidates;
+    3. decodes the candidates with that channel and keeps rows where packets
+       pass the CRC;
+    4. refits the channel from the packets that passed (twice).
+
+    Returns (rows, channel, {row: (lines decoded, CRC ok)})."""
     sampler = wst.LineSampler(fmt.sample_rate)
     n = len(frames)
     picks = np.unique(np.linspace(0, n - 1, min(n, scan_frames)).astype(int))
-    lines = {r: [] for r in range(fmt.lines_per_frame)}
+    pool = {r: [] for r in range(fmt.lines_per_frame)}
     for f in picks:
         data = np.asarray(frames[f])
-        act = data.astype(float).std(1) > ACTIVE_STD
+        act = data.astype(np.float32).std(1) > ACTIVE_STD
         for r in np.nonzero(act)[0]:
-            if len(lines[r]) < lines_per_row * 4:
-                lines[r].append(data[r])
-        if all(len(v) >= lines_per_row * 4 for v in lines.values()):
-            break
-    # spread the chosen lines over what was collected
-    for r in lines:
-        v = lines[r]
-        if len(v) > lines_per_row:
-            lines[r] = [v[i] for i in np.linspace(0, len(v) - 1, lines_per_row).astype(int)]
+            pool[r].append(data[r])
+    lines = {}
+    for r, v in pool.items():
+        if len(v) >= 5:
+            idx = np.unique(np.linspace(0, len(v) - 1, min(len(v), lines_per_row)).astype(int))
+            lines[r] = [v[i] for i in idx]
+
+    prepared = {}
+    fits = {}
+    for r, v in lines.items():
+        ys = [sampler.sample(l, 0.0) for l in v]
+        ys = [y for y in ys if y is not None]
+        if len(ys) < 5:
+            continue
+        prepared[r] = ys
+        taps, off, res = wst.fit_header(ys)
+        fits[r] = (taps, off, res)
+    cand = [r for r, (t, o, res) in fits.items() if t.max() > 25 and res < 0.4 * t.max()]
+    stats = {r: (len(lines.get(r, [])), 0) for r in lines}
+    if not cand:
+        return [], Channel(wst.DEFAULT_TAPS, wst.DEFAULT_OFFSET), stats
+    taps, off, _ = wst.fit_header([y for r in cand for y in prepared[r]])
+    ch = Channel(taps, off)
 
     def run(rows, ch):
-        stats, samples, bits = {}, [], []
+        st, samples, bits = {}, [], []
         for r in rows:
             a = ok = 0
             for line in lines[r]:
-                res = wst.decode_line(line, sampler, ch.taps, ch.offset)
+                res = wst.decode_line(line, sampler, ch.taps, ch.offset, ch.shifts, crc_ok)
                 if res is None:
                     continue
-                pkt, err, y, b = res
+                pkt, err, y, b, sh = res
                 a += 1
                 p = idl.parse(pkt) if err == 0 else None
                 if p is not None and p.crc_ok:
                     ok += 1
                     samples.append(y)
                     bits.append(b)
-            stats[r] = (a, ok)
-        return stats, samples, bits
+            st[r] = (a, ok)
+        return st, samples, bits
 
-    stats, samples, bits = run([r for r in lines if lines[r]], ch)
-    rows = [r for r, (a, ok) in stats.items() if ok >= 3 and ok >= 0.2 * a]
+    st, samples, bits = run(cand, ch)
+    stats.update(st)
+    rows = [r for r in cand if st[r][1] >= 3 and st[r][1] >= 0.05 * st[r][0]]
     for _ in range(2):
         if len(samples) < 20:
             break
         ch = Channel(*wst.fit_channel(samples, bits))
-        s2, samples, bits = run(rows, ch)
-        stats.update(s2)
-    return rows, ch, stats
+        st, samples, bits = run(rows, ch)
+        stats.update(st)
+    return sorted(rows), ch, stats
 
 
 _G = {}
 
 
-def _init(path, fmt, rows, taps, offset):
+def _init(path, fmt, rows, taps, offset, shifts):
     _G["frames"] = open_vbi(path, fmt)
     _G["rows"] = rows
-    _G["ch"] = Channel(np.asarray(taps), offset)
+    _G["ch"] = Channel(np.asarray(taps), offset, shifts)
     _G["sampler"] = wst.LineSampler(fmt.sample_rate)
 
 
@@ -107,7 +135,7 @@ def decode_file(path, rows, ch, fmt=BTTV_PAL, start=0, stop=None, workers=None,
     stop = n if stop is None else min(stop, n)
     ranges = [(a, min(a + chunk, stop)) for a in range(start, stop, chunk)]
     out = []
-    with mp.Pool(workers or mp.cpu_count(), _init, (path, fmt, list(rows), ch.taps, ch.offset)) as pool:
+    with mp.Pool(workers or mp.cpu_count(), _init, (path, fmt, list(rows), ch.taps, ch.offset, ch.shifts)) as pool:
         for i, res in enumerate(pool.imap(_work, ranges)):
             out += res
             if progress:

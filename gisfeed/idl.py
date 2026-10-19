@@ -31,6 +31,31 @@ def crc_register(data):
     return r
 
 
+# Bit error patterns the Viterbi detector typically leaves behind (single
+# bits and short bursts); used for CRC based error correction.
+ERROR_PATTERNS = ((1,), (1, 1), (1, 1, 1), (1, 1, 1, 1), (1, 0, 1), (1, 1, 1, 1, 1))
+_SYNDROMES = {}
+
+
+def _syndrome_table(nbytes):
+    """Maps CRC syndromes to error positions for a CRC span of nbytes."""
+    if nbytes not in _SYNDROMES:
+        nbits = nbytes * 8
+        table = {}
+        for pat in ERROR_PATTERNS:
+            for start in range(nbits - len(pat) + 1):
+                e = bytearray(nbytes)
+                for i, b in enumerate(pat):
+                    if b:
+                        k = start + i
+                        e[k // 8] |= 1 << (k % 8)
+                syn = crc_register(e)
+                # ambiguous syndromes are not used
+                table[syn] = None if syn in table else bytes(e)
+        _SYNDROMES[nbytes] = table
+    return _SYNDROMES[nbytes]
+
+
 @dataclass
 class IdlPacket:
     channel: int
@@ -40,6 +65,7 @@ class IdlPacket:
     data: bytes
     crc_ok: bool
     raw: bytes
+    corrected: int = 0  # number of bits fixed by CRC error correction
 
 
 def parse(pkt: bytes) -> Optional[IdlPacket]:
@@ -76,7 +102,44 @@ def parse(pkt: bytes) -> Optional[IdlPacket]:
     room = 43 - pos
     n = room if dl is None else min(dl, room)
     data = pkt[pos: pos + n]
+    full = n == room
+    span = pkt[crc_start:45] if full else pkt[crc_start: pos + n] + pkt[43:45]
+    syn = crc_register(span)
+    if syn == 0 or full:
+        return IdlPacket(ch, spa, ci, repeat, bytes(data), syn == 0, bytes(pkt))
+    # filler not covered by the CRC (see module docstring); fall back to the
+    # standard span if that one matches
     ok = crc_register(pkt[crc_start:45]) == 0
-    if not ok and n < room:
-        ok = crc_register(pkt[crc_start: pos + n] + pkt[43:45]) == 0
     return IdlPacket(ch, spa, ci, repeat, bytes(data), ok, bytes(pkt))
+
+
+def correct(pkt: bytes) -> Optional[IdlPacket]:
+    """Tries to repair a packet whose CRC fails, assuming one short error burst.
+
+    Returns the repaired packet (with .corrected set) or None."""
+    p = parse(pkt)
+    if p is None or p.crc_ok or p.ci is None:
+        return None
+    # locate the CRC span exactly as parse() does
+    ft = HAM84[pkt[5]][0]
+    pos = 7 + (HAM84[pkt[6]][0] & 7)
+    crc_start = pos + (1 if ft & 2 else 0)
+    dl_pos = crc_start + 1
+    dl = pkt[dl_pos] & 0x3F if ft & 8 else 33
+    end = dl_pos + 1 + dl
+    if end >= 43:
+        idx = list(range(crc_start, 45))
+    else:
+        idx = list(range(crc_start, end)) + [43, 44]
+    span = bytes(pkt[i] for i in idx)
+    err = _syndrome_table(len(span)).get(crc_register(span))
+    if err is None:
+        return None
+    fixed = bytearray(pkt)
+    for i, e in zip(idx, err):
+        fixed[i] ^= e
+    q = parse(bytes(fixed))
+    if q is None or not q.crc_ok:
+        return None
+    q.corrected = sum(bin(e).count("1") for e in err)
+    return q

@@ -16,7 +16,8 @@ messages with consecutive sequence numbers.
 """
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import List
+
+import numpy as np
 
 START = b"\x10\x02\x07"
 END = b"\x00\x10\x03"
@@ -137,6 +138,62 @@ def records_from_streams(streams):
     return recs, stats
 
 
+def _delta_track(primary, other, max_lag=3):
+    """Continuity indicator offset between two copies of the feed over time.
+
+    Returns a sorted list of (frame, delta) from packets whose user data
+    (after the block flag) is identical in both copies."""
+    index = defaultdict(list)
+    for frame, ci, data in other:
+        index[data[1:]].append((frame, ci))
+    track = []
+    for frame, ci, data in primary:
+        for f2, ci2 in index.get(data[1:], ()):
+            if abs(f2 - frame) <= max_lag:
+                track.append((frame, (ci2 - ci) & 0xFF))
+                break
+    return track
+
+
+def fill_gaps(primary, other, max_lag=3):
+    """Fills missing packets of one copy of the feed from the other copy.
+
+    The copy in the other field carries the same user data (except the block
+    flag) with its continuity indicator offset by a constant that is found
+    from matching packets. Returns the filled list of (frame, ci, data)."""
+    track = _delta_track(primary, other, max_lag)
+    if not track or not primary:
+        return primary
+    frames = np.array([t[0] for t in track])
+    deltas = [t[1] for t in track]
+    by_ci = defaultdict(list)
+    for frame, ci, data in other:
+        by_ci[ci].append((frame, data))
+
+    def delta_at(frame):
+        i = int(np.searchsorted(frames, frame))
+        lo, hi = max(0, i - 25), min(len(deltas), i + 25)
+        vals = deltas[lo:hi]
+        return max(set(vals), key=vals.count)
+
+    out = [primary[0]]
+    for frame, ci, data in primary[1:]:
+        pf, pci, _ = out[-1]
+        gap = (ci - pci - 1) & 0xFF
+        if 0 < gap < 64 and frame - pf <= 50:
+            d = delta_at(frame)
+            for k in range(1, gap + 1):
+                want = (pci + k) & 0xFF
+                for f2, d2 in by_ci.get((want + d) & 0xFF, ()):
+                    if pf - max_lag <= f2 <= frame + max_lag:
+                        out.append((f2, want, d2))
+                        break
+                else:
+                    break  # keep the remaining gap
+        out.append((frame, ci, data))
+    return out
+
+
 def group_streams(packets, min_packets=20):
     """packets: iterable of (frame, row, IdlPacket) with CRC ok, in frame order.
 
@@ -146,4 +203,10 @@ def group_streams(packets, min_packets=20):
     streams = defaultdict(list)
     for frame, row, p in packets:
         streams[(p.channel, p.spa, row >= 16)].append((frame, p.ci, p.data))
-    return {k: v for k, v in streams.items() if len(v) >= min_packets}
+    streams = {k: v for k, v in streams.items() if len(v) >= min_packets}
+    # each field's copy is completed from the other field's copy
+    filled = {}
+    for (ch, spa, f2), pk in streams.items():
+        other = streams.get((ch, spa, not f2))
+        filled[(ch, spa, f2)] = fill_gaps(pk, other) if other else pk
+    return filled
