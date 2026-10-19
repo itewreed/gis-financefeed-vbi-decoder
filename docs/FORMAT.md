@@ -45,9 +45,35 @@ per bit at offsets −3 … +3 bits, is close to
 
     [0, 0, 24, 53, 23, −4, −1]
 
-i.e. roughly a 1 + 2D + D² partial-response channel. The decoder recovers
-the bits with a 64-state Viterbi detector against this channel model, which
-it refits for every recording from the packets that pass the CRC.
+i.e. roughly a 1 + 2D + D² partial-response channel.
+
+How the decoder recovers the bits:
+
+1. **Normalise and filter.** Black level and peak are measured per line and
+   the line is low-pass filtered at 3.5 MHz. Everything above that is noise;
+   on a noisy recording the filter alone raised the share of good packets
+   from 32 % to 57 %.
+2. **Find the packet.** The start is located by correlating the line with
+   the expected waveform of the run-in, framing code and packet address
+   (`55 55 27 9B EA`). The bit clock phase is taken from the zero crossings
+   of the whole line.
+3. **Detect.** One sample per bit is fed to a 256-state Viterbi detector
+   (channel memory ±4 bits) that is constrained to start with the known 40
+   bits. Neighbouring alignments (±1 bit) are tried if the CRC fails.
+4. **Estimate the channel per recording.** The first estimate comes from the
+   known 64-bit packet header (`55 55 27 9B EA A1 02 2F`) on a sample of
+   lines; it is refined twice from the packets that pass the CRC.
+5. **Repair.** Packets that still fail the CRC are repaired when the CRC
+   syndrome points to exactly one short error burst (1–5 bits, the typical
+   error events of the detector). Measured against the copy in the other
+   field, about 1 % of these repairs are wrong; repaired packets are only
+   used where the other copy is missing.
+6. **Merge the two copies** (see section 3).
+
+| recording | lines | CRC ok, detected | after repair |
+| --- | --- | --- | --- |
+| January 1994, good signal | 18 194 | 98.3 % | 99.6 % |
+| December 1993, noisy | 21 104 | 65 % | 86 % |
 
 ## 3. Teletext packets: Independent Data Lines
 
@@ -84,8 +110,10 @@ includes the filler.
 **Two copies.** The second field carries the same feed again as a separate
 stream with its own continuity counter. The user data of the two copies is
 identical except for the first byte (see below), which is XORed with `C5` in
-the second-field copy. The decoder merges both copies, which recovers most
-of the packets lost in one of them.
+the second-field copy. The two copies are sent at almost the same time
+(within one frame), and their continuity indicators differ by a constant
+(e.g. 24 or 26). The decoder finds that offset from packets with identical
+data and fills every gap in one copy from the other copy.
 
 ## 4. Byte stream
 

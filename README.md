@@ -45,13 +45,17 @@ about 3 MHz of luminance bandwidth. The recorded signal is so smeared that a
 normal teletext slicer finds almost nothing. This decoder treats each line as
 a partial-response channel instead:
 
-1. the bit clock phase is recovered from the signal's zero crossings,
-2. the line is sampled once per bit,
+1. the line is low-pass filtered and the packet start is found by
+   correlation with the known run-in, framing code and address,
+2. the bit clock phase is recovered from the zero crossings and the line is
+   sampled once per bit,
 3. a Viterbi (maximum-likelihood sequence) detector finds the bit sequence,
-   using a channel model that is fitted to each recording from the packets
-   that pass the CRC.
+   using a channel model that is fitted to each recording,
+4. short bit error bursts are repaired through the CRC, and packets lost in
+   one field are taken from the copy of the feed in the other field.
 
-On the test recording, 98 % of all data lines yield a packet with a valid CRC.
+On a good recording 99.6 % of all data lines yield a valid packet; on a
+noisy one 86 %.
 
 ## Requirements
 
@@ -85,6 +89,7 @@ Options:
 | `--rows 7,8,13,14` | decode only these rows (default: detect) |
 | `--start N`, `--stop N` | frame range |
 | `--workers N` | number of processes (default: all CPUs) |
+| `--no-correction` | do not repair packets through the CRC |
 
 Output in `outdir`:
 
@@ -98,6 +103,12 @@ Output in `outdir`:
 | `packets.t42` | all decoded lines as 42-byte teletext packets (t42 format) |
 
 Times in the output are positions in the recording (frame / 25).
+
+## Tests
+
+```
+python3 -m unittest discover -s tests
+```
 
 ## How the feed is built
 

@@ -70,12 +70,16 @@ def survey(frames, fmt, lines_per_row=60, scan_frames=8000):
         prepared[r] = ys
         taps, off, res = wst.fit_header(ys)
         fits[r] = (taps, off, res)
+    # rows whose lines fit the header well give the first channel estimate;
+    # a looser test selects the rows that are tried with it
     cand = [r for r, (t, o, res) in fits.items() if t.max() > 25 and res < 0.4 * t.max()]
+    loose = [r for r, (t, o, res) in fits.items() if t.max() > 15 and res < 0.7 * t.max()]
     stats = {r: (len(lines.get(r, [])), 0) for r in lines}
     if not cand:
         return [], Channel(wst.DEFAULT_TAPS, wst.DEFAULT_OFFSET), stats
     taps, off, _ = wst.fit_header([y for r in cand for y in prepared[r]])
     ch = Channel(taps, off)
+    cand = sorted(set(cand) | set(loose))
 
     def run(rows, ch):
         st, samples, bits = {}, [], []
