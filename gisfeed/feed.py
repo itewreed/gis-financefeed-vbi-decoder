@@ -3,10 +3,12 @@
 Every IDL packet of the feed starts with one block-flag byte, followed by the
 next bytes of a continuous byte stream. The byte stream carries messages:
 
-  10 02 07 SQ 05 00 T1 T2 01 06 LL LH KD FR 00 <payload, LL|LH<<8 bytes> 00 10 03
+  10 02 07 SQ NN 00 T1 T2 01 06 LL LH KD FR 00 <payload, LL|LH<<8 bytes> 00 10 03
 
-or, when there is nothing to send, short control messages such as
-  10 02 07 SQ 01 00 00 00 00 00 10 03
+  NN     05 or 06 in data messages (meaning unknown)
+
+or, when there is nothing to send, short idle messages
+  10 02 07 SQ NN 00 00 00 00 00 10 03
 
   SQ     message sequence number (mod 256)
   T1 T2  record type: 10 10 Reuters page data, 10 20 GIS screen, 50 30 packed data
@@ -74,29 +76,26 @@ def byte_runs(packets):
 def parse_messages(run, frames):
     """Finds the messages in a run of the byte stream.
 
-    Data messages (class 05) carry a length; other classes (01, 03, ...) are
-    short control messages sent while there is nothing to transmit, which
-    end at the next 10 03 and are returned with rtype None."""
+    Besides data messages there are short idle messages, sent when there is
+    nothing to transmit (10 02 07 SQ NN 00 00 00 00 00 10 03, NN varies);
+    they are returned with rtype None."""
     out = []
     i = 0
     while True:
         j = run.find(START, i)
-        if j < 0 or j + 6 > len(run):
+        if j < 0 or j + 12 > len(run):
             break
-        cls = run[j + 4]
-        if cls == 0x05 and j + 15 <= len(run):
+        if run[j + 5:j + 10] == bytes(5) and run[j + 10:j + 12] == b"\x10\x03":
+            out.append(Message(frames[j], run[j + 3], None, run[j + 4], 0, b""))
+            i = j + 12
+            continue
+        if j + 15 <= len(run):
             length = run[j + 10] | run[j + 11] << 8
             end = j + 15 + length
             if end + 3 <= len(run) and run[end:end + 3] == END:
                 out.append(Message(frames[j], run[j + 3], run[j + 6] << 8 | run[j + 7],
                                    run[j + 12], run[j + 13], run[j + 15:end]))
                 i = end + 3
-                continue
-        elif cls != 0x05:
-            k = run.find(b"\x10\x03", j + 5)
-            if 0 <= k < j + 64:
-                out.append(Message(frames[j], run[j + 3], None, cls, 0, run[j + 4:k]))
-                i = k + 2
                 continue
         i = j + 1
     return out

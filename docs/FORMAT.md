@@ -129,14 +129,19 @@ The byte stream carries messages, each preceded by two bytes `32 32` whose
 meaning is not known:
 
 ```
-10 02  07  SQ  05 00  T1 T2  01 06  LL LH  KD  FR  00   payload ...   00 10 03
+10 02  07  SQ  NN 00  T1 T2  01 06  LL LH  KD  FR  00   payload ...   00 10 03
 DLE STX    seq        type          length kind frag     (LL|LH<<8)   end
 ```
+
+When there is nothing to send, the feed carries short idle messages
+instead: `10 02 07 SQ NN 00 00 00 00 00 10 03`. Recordings in which the
+feed lines are active but no data was being sent contain only these.
 
 | field | meaning |
 | --- | --- |
 | `10 02` | DLE STX, start of message |
 | `SQ` | sequence number, +1 per message, modulo 256 |
+| `NN` | 05 or 06 in data messages, other small values in idle messages; meaning unknown |
 | `T1 T2` | record type: `10 10` Reuters data, `10 20` GIS screen, `50 30` packed record |
 | `LL LH` | payload length, little endian |
 | `KD` | 1 or 2; meaning unknown (possibly a priority) |
