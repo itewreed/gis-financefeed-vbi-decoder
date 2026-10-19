@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gisfeed"
+version = "0.1.0"
+description = "Decoder for the GIS financial data feed hidden in the VBI of ProSieben VHS recordings (1992-1994)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy"]
+
+[project.scripts]
+gisfeed = "gisfeed.cli:main"
+
+[tool.setuptools]
+packages = ["gisfeed"]
