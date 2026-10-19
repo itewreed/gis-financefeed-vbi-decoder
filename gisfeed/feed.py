@@ -5,6 +5,9 @@ next bytes of a continuous byte stream. The byte stream carries messages:
 
   10 02 07 SQ 05 00 T1 T2 01 06 LL LH KD FR 00 <payload, LL|LH<<8 bytes> 00 10 03
 
+or, when there is nothing to send, short control messages such as
+  10 02 07 SQ 01 00 00 00 00 00 10 03
+
   SQ     message sequence number (mod 256)
   T1 T2  record type: 10 10 Reuters page data, 10 20 GIS screen, 50 30 packed data
   KD     1 or 2 (unknown meaning, possibly a priority)
@@ -69,20 +72,33 @@ def byte_runs(packets):
 
 
 def parse_messages(run, frames):
+    """Finds the messages in a run of the byte stream.
+
+    Data messages (class 05) carry a length; other classes (01, 03, ...) are
+    short control messages sent while there is nothing to transmit, which
+    end at the next 10 03 and are returned with rtype None."""
     out = []
     i = 0
     while True:
         j = run.find(START, i)
-        if j < 0 or j + 15 > len(run):
+        if j < 0 or j + 6 > len(run):
             break
-        length = run[j + 10] | run[j + 11] << 8
-        end = j + 15 + length
-        if end + 3 <= len(run) and run[end:end + 3] == END:
-            out.append(Message(frames[j], run[j + 3], run[j + 6] << 8 | run[j + 7],
-                               run[j + 12], run[j + 13], run[j + 15:end]))
-            i = end + 3
-        else:
-            i = j + 1
+        cls = run[j + 4]
+        if cls == 0x05 and j + 15 <= len(run):
+            length = run[j + 10] | run[j + 11] << 8
+            end = j + 15 + length
+            if end + 3 <= len(run) and run[end:end + 3] == END:
+                out.append(Message(frames[j], run[j + 3], run[j + 6] << 8 | run[j + 7],
+                                   run[j + 12], run[j + 13], run[j + 15:end]))
+                i = end + 3
+                continue
+        elif cls != 0x05:
+            k = run.find(b"\x10\x03", j + 5)
+            if 0 <= k < j + 64:
+                out.append(Message(frames[j], run[j + 3], None, cls, 0, run[j + 4:k]))
+                i = k + 2
+                continue
+        i = j + 1
     return out
 
 
@@ -93,11 +109,23 @@ def stream_messages(packets):
     return msgs
 
 
+def control_messages(streams):
+    """Counts the control messages per class over all streams."""
+    counts = defaultdict(int)
+    for pk in streams.values():
+        for m in stream_messages(pk):
+            if m.rtype is None:
+                counts[m.kind] += 1
+    return dict(counts)
+
+
 def chain(messages):
     """Joins fragments of one stream into records."""
     out = []
     pending = {}
     for m in messages:
+        if m.rtype is None:
+            continue
         pos, part = m.frag & 0xF, m.frag >> 4
         if pos in (0, 2):
             pending[m.rtype] = [m]
@@ -202,8 +230,13 @@ def group_streams(packets, min_packets=20):
     pass the 16-bit CRC."""
     streams = defaultdict(list)
     for frame, row, p in packets:
+        if p.ci is None:  # only the explicit-CI format of the feed is handled
+            continue
         streams[(p.channel, p.spa, row >= 16)].append((frame, p.ci, p.data))
-    streams = {k: v for k, v in streams.items() if len(v) >= min_packets}
+    # streams far smaller than the main one come from packets whose address
+    # or CRC was damaged in a way the CRC did not catch
+    largest = max((len(v) for v in streams.values()), default=0)
+    streams = {k: v for k, v in streams.items() if len(v) >= max(min_packets, 0.01 * largest)}
     # each field's copy is completed from the other field's copy
     filled = {}
     for (ch, spa, f2), pk in streams.items():

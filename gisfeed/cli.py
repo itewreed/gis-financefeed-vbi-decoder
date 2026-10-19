@@ -80,6 +80,9 @@ def cmd_decode(args):
     streams = feed.group_streams(parsed)
     for sid, pk in streams.items():
         say(f"  stream channel {sid[0]} SPA {sid[1]} field {2 if sid[2] else 1}: {len(pk)} packets")
+    ctl = feed.control_messages(streams)
+    if ctl:
+        say(f"idle messages (nothing to send): {sum(ctl.values())}")
     recs, st = feed.records_from_streams(streams)
     say(f"records: {len(recs)}")
     from collections import Counter

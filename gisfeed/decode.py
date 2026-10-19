@@ -7,7 +7,8 @@ import numpy as np
 from . import idl, wst
 from .vbi import BTTV_PAL, open_vbi
 
-ACTIVE_STD = 15.0  # raw sample std above which a line is considered to carry data
+ACTIVE_STD = 15.0
+FEED_ROWS = (7, 8, 13, 14, 23, 24, 29, 30)  # TV lines 14, 15, 20, 21, 327, 328, 333, 334  # raw sample std above which a line is considered to carry data
 
 
 @dataclass
@@ -108,6 +109,10 @@ def survey(frames, fmt, lines_per_row=60, scan_frames=8000):
         ch = Channel(*wst.fit_channel(samples, bits))
         st, samples, bits = run(rows, ch)
         stats.update(st)
+    # the feed always uses the same lines; if some of them were found, decode
+    # all of them (lines without a signal are skipped quickly)
+    if set(rows) & set(FEED_ROWS):
+        rows = sorted(set(rows) | set(FEED_ROWS))
     return sorted(rows), ch, stats
 
 
