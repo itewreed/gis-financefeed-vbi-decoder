@@ -35,6 +35,22 @@ def expand(data):
     return "".join(out)
 
 
+def format_security(s):
+    def num(v):
+        return "-" if v is None else f"{v:g}"
+    line = f"{s.exchange} {s.currency or '---'} high {num(s.high)} low {num(s.low)} last {num(s.last)}"
+    if s.price_date:
+        line += f" ({s.price_date})"
+    line += f"  {s.name}"
+    if s.symbol:
+        line += f" [{s.symbol}]"
+    if s.coupon is not None:
+        line += f"  {s.coupon:g} %"
+    if s.maturity:
+        line += f" due {s.maturity}"
+    return line
+
+
 class ReutersPage:
     def __init__(self, code):
         self.code = code
@@ -117,6 +133,8 @@ class PageStore:
             dump = "\n".join(p[i:i + 20].hex(" ") for i in range(0, len(p), 20))
             return f"control block (type 5010), {len(p)} bytes", dump
         if rec.rtype == 0x5030:
-            frags = packed.text_fragments(p)
-            return f"packed record, {len(p)} bytes", " | ".join(frags)
+            secs = packed.parse_record(p)
+            if not secs:
+                return f"securities record, {len(p)} bytes (not parsed)", " | ".join(packed.text_fragments(p))
+            return f"securities record, {len(secs)} entries", "\n".join(format_security(x) for x in secs)
         return f"record type {rec.rtype:04x}, {len(p)} bytes", None

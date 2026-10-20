@@ -1,5 +1,6 @@
 """Command line interface: python -m gisfeed decode capture.vbi -o outdir"""
 import argparse
+import csv
 import json
 import os
 import sys
@@ -7,7 +8,7 @@ import time
 
 import numpy as np
 
-from . import decode, feed, idl, pages, wst
+from . import decode, feed, idl, packed, pages, wst
 from .vbi import BTTV_PAL, open_vbi
 
 RECORD_NAMES = {0x1010: "reuters", 0x1020: "gis", 0x5010: "control", 0x5030: "packed"}
@@ -16,6 +17,40 @@ RECORD_NAMES = {0x1010: "reuters", 0x1020: "gis", 0x5010: "control", 0x5030: "pa
 def frame_time(frame):
     s = frame / 25.0
     return f"{int(s // 3600):02d}:{int(s // 60 % 60):02d}:{s % 60:05.2f}"
+
+
+def write_securities(out, securities):
+    """Writes securities.csv (every quote) and securities_latest.csv (the last
+    quote of every security at every exchange). Returns the two counts."""
+    cols = list(packed.Security("").as_dict())
+    with open(os.path.join(out, "securities.csv"), "w", newline="") as fc:
+        w = csv.writer(fc)
+        w.writerow(["time"] + cols)
+        for frame, sec in securities:
+            w.writerow([frame_time(frame)] + list(sec.as_dict().values()))
+    latest = {}
+    for frame, sec in securities:
+        if sec.name or sec.last is not None:
+            latest[(sec.entry_id, sec.exchange)] = (frame, sec)
+    with open(os.path.join(out, "securities_latest.csv"), "w", newline="") as fc:
+        w = csv.writer(fc)
+        w.writerow(["time"] + cols)
+        for frame, sec in sorted(latest.values(), key=lambda x: (x[1].name, x[1].exchange)):
+            w.writerow([frame_time(frame)] + list(sec.as_dict().values()))
+    return len(securities), len(latest)
+
+
+def cmd_securities(args):
+    """Rebuilds the securities tables from records.jsonl of an earlier decode."""
+    securities = []
+    with open(os.path.join(args.dir, "records.jsonl")) as f:
+        for line in f:
+            r = json.loads(line)
+            if r["type"] == "packed":
+                for sec in packed.parse_record(bytes.fromhex(r["payload_hex"])):
+                    securities.append((r["frame"], sec))
+    n, m = write_securities(args.dir, securities)
+    print(f"{args.dir}: {n} quotes, {m} distinct securities and exchanges")
 
 
 def cmd_decode(args):
@@ -90,6 +125,7 @@ def cmd_decode(args):
                                       for t, n in Counter(r.rtype for r in recs).items()))
 
     store = pages.PageStore()
+    securities = []
     os.makedirs(os.path.join(args.out, "packed"), exist_ok=True)
     with open(os.path.join(args.out, "records.txt"), "w", encoding="utf-8") as rt, \
             open(os.path.join(args.out, "records.jsonl"), "w") as rj:
@@ -105,6 +141,8 @@ def cmd_decode(args):
                                  "description": desc, "text": text,
                                  "payload_hex": rec.payload.hex()}) + "\n")
             if rec.rtype == 0x5030:
+                for sec in packed.parse_record(rec.payload):
+                    securities.append((rec.frame, sec))
                 with open(os.path.join(args.out, "packed", f"{rec.frame:07d}_{rec.seq:02x}.bin"), "wb") as fb:
                     fb.write(rec.payload)
     pdir = os.path.join(args.out, "pages")
@@ -120,6 +158,9 @@ def cmd_decode(args):
     for sid, text in sorted(store.gis.items()):
         with open(os.path.join(pdir, f"GIS_{sid}.txt"), "w", encoding="utf-8") as fp:
             fp.write(text + "\n")
+    if securities:
+        n, m = write_securities(args.out, securities)
+        say(f"securities: {n} quotes, {m} distinct securities and exchanges")
     say(f"Reuters pages: {len(store.pages)} ({sum(p.complete for p in store.pages.values())} complete), "
         f"GIS screens: {len(store.gis)}")
 
@@ -136,6 +177,10 @@ def main(argv=None):
     d.add_argument("--workers", type=int, help="worker processes (default: all CPUs)")
     d.add_argument("--no-correction", action="store_true",
                    help="do not repair packets with a failed CRC")
+    sc = sub.add_parser("securities", help="rebuild the securities tables of a decoded directory")
+    sc.add_argument("dir", help="output directory of an earlier decode")
     args = ap.parse_args(argv)
     if args.cmd == "decode":
         cmd_decode(args)
+    elif args.cmd == "securities":
+        cmd_securities(args)

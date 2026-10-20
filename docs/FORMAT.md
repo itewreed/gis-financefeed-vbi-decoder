@@ -190,18 +190,66 @@ pages AASS and AAUU.
 drawing characters such as `C4` = `─`). The screens seen so far belong to
 an address list of the banks in the *GENO-KIS* pilot test.
 
-### 6.3 Packed records (`50 30`)
+### 6.3 Securities records (`50 30`)
 
-The largest part of the feed. Each record starts with a header such as
-`7x AF 58 E6/E7 82 xA ...`. The content is nibble oriented: read as a
-stream of 4-bit units (low nibble of each byte first), ASCII text appears at
-both even and odd nibble positions. A frequent field is the nibble `E`
-followed by seven characters. The readable text shows securities data:
-issuer names (e.g. LANDESBANK HESSEN-THUERINGEN, B.A.T. INDUSTRIES PLC,
-CATHAY PACIFIC FIN.), currencies (DMK, USD, NLG, DKK, AUD), months,
-maturities (e.g. 88/95) and certificate types. The numeric fields and the
-exact record layout have not been decoded; the decoder outputs the raw
-payload and the readable text fragments.
+The largest part of the feed: prices and master data of securities quoted
+at German and foreign exchanges (bonds, Pfandbriefe, shares, warrants,
+indices). A record holds one or more entries, one per security and exchange.
+Entries come in two forms.
+
+**Full entries** are 200 bytes with fixed positions (all numbers little
+endian):
+
+| offset | content |
+| --- | --- |
+| 0–2 | entry id |
+| 4–9 | symbol (shares, warrants) |
+| 10–12 | exchange code |
+| 16–19 | last price × 10000 |
+| 45–49, 66–70 | time stamps: hour, minute, day, month, year (two digits) |
+| 51–54, 55–58 | high and low (of the year) × 10000 |
+| 59–61 | currency |
+| 71–78 | two codes (type, status) |
+| 94, 95–98 | coupon day and month (e.g. 20, "OKT ") |
+| 99–101 | country code (German foreign trade statistics: 004 Germany, 400 USA, 732 Japan, ...) |
+| 108–145 | name |
+| 150–152 | maturity: day, month, year (bonds) |
+| 153–156 | coupon × 100000 (637500 = 6.375 %) |
+| 157 | coupon payments per year |
+
+**Packed entries** carry the same information in about 115 bytes. The
+entry starts with its length in bytes and the bytes `FA 85`. Its content is
+a stream of 4-bit nibbles, the low nibble of each byte first, made of
+variable-length fields: one nibble giving the field length L, then L nibbles
+of data. Leading zeros of numbers and trailing spaces of text are dropped,
+which is where the saving comes from. Text is read two nibbles (low, high)
+per character; a number is its nibbles in reverse order read as hex.
+
+| field | content | example |
+| --- | --- | --- |
+| exchange | 3 letters: region, country, exchange | `EDF` Frankfurt, `EDD` Düsseldorf, `EIM` Milan, `NAY` New York, `FJT` Tokyo, `AAS` Sydney |
+| – | always 11 | |
+| high, low, last | price × 10000 | 1021000 = 102.10 |
+| price date | packed date (below) | |
+| currency | | DMK, USD, ITL, JPY, XEU |
+| type, status | codes, meaning unknown | `2300`, `20 0` |
+| symbol, country | as in full entries | |
+| coupon day, month | | 16, `JAN`; `JJ` = January and July |
+| maturity | packed date | |
+| name | pieces of up to 7 characters, joined | |
+| coupon, frequency | as in full entries | 687500, 1 |
+
+Packed dates are 16 bits: year (two digits) in bits 0–6, month in bits 7–10,
+day in bits 11–15; e.g. `865D` = 16 December 1993.
+
+The meaning of the fields was found by comparing the 68 full entries of the
+December 1993 recording with packed entries of the same securities, which
+agree in all prices and dates. High and low are most likely the high and low
+of the year: in the recording of 6 January 1994 they are close to the last
+price for nearly every security, in December 1993 they span the whole year.
+
+The decoder writes every quote to `securities.csv` and the last quote of
+every security at every exchange to `securities_latest.csv`.
 
 ### 6.4 Control block (`50 10`)
 

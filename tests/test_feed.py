@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from gisfeed import feed, idl, pages, wst
+from gisfeed import feed, idl, packed, pages, wst
 
 FULL = bytes.fromhex(
     "5555279beaa1022f80211512030974af58e7825a9b0302a4461c10400000564444146be04b1006be0461e0c3ea")
@@ -69,6 +69,24 @@ class TestFeed(unittest.TestCase):
         store.apply(rec)
         self.assertEqual("".join(page.rows[5][:31]), "DJ INDS      3804.73      +5.90")
         self.assertEqual("".join(page.rows[0][60:]), "1937")
+
+
+class TestPacked(unittest.TestCase):
+    ENTRY = bytes.fromhex(
+        "71af58e78200b01302421110400000564464145b48945f60195e48944f5d8646d4b484323330302803030213c0"
+        "20202020202001010603432310a814e4044291804e4455e4829405e54f42414e4b20462e15e4b464e4b2e44f2e"
+        "454d3631310e8273839273f36231372900508c7d2a31ad")
+
+    def test_packed_entry(self):
+        (s,) = packed.parse_record(self.ENTRY)
+        self.assertEqual(s.exchange, "EDF")
+        self.assertEqual(s.name, "DTE.HYPOBANK FRANKF.KO.EM611 87(97/17)")
+        self.assertEqual((s.currency, s.high, s.low, s.last), ("DMK", 102.1, 92.4, 102.1))
+        self.assertEqual(s.price_date, "1993-12-16")
+        self.assertEqual((s.coupon, s.coupon_date, s.maturity), (6.875, "16 JAN", "2017-01-16"))
+
+    def test_date(self):
+        self.assertEqual(packed.unpack_date(0x865D), "1993-12-16")
 
 
 if __name__ == "__main__":

@@ -19,8 +19,9 @@ GmbH**, the information service of the German cooperative banking group
 * **news headlines** (Reuters and Dow Jones)
 * **GIS screens** (78 × 22, code page 437), e.g. the address list of the
   banks taking part in the *GENO-KIS* pilot test
-* **packed securities records** (bonds, certificates, currencies) in a
-  nibble-oriented format that is only partly understood
+* **securities data**: prices, coupons, maturities and names of bonds,
+  Pfandbriefe, shares and warrants at German and foreign exchanges, in a
+  packed nibble format
 
 Example: Reuters page IDXA, reconstructed from a recording made on
 6 January 1994, 19:39 GMT, with the live updates applied:
@@ -82,6 +83,9 @@ automatically.
 python3 -m gisfeed decode capture.vbi -o outdir
 ```
 
+`python3 -m gisfeed securities outdir` rebuilds the securities tables from
+the `records.jsonl` of an earlier run.
+
 Options:
 
 | option | meaning |
@@ -99,7 +103,9 @@ Output in `outdir`:
 | `records.txt` | every decoded record in time order, rendered as text |
 | `records.jsonl` | the same, one JSON object per record, with the raw payload |
 | `pages/XXXX.txt` | final state of every Reuters page (`pages/GIS_*.txt` for GIS screens) |
-| `packed/*.bin` | raw payload of every packed record |
+| `securities.csv` | every securities quote (exchange, name, currency, high, low, last, price date, coupon, maturity, ...) |
+| `securities_latest.csv` | the last quote of every security at every exchange |
+| `packed/*.bin` | raw payload of every securities record |
 | `packets.t42` | all decoded lines as 42-byte teletext packets (t42 format) |
 
 Times in the output are positions in the recording (frame / 25).
@@ -121,8 +127,9 @@ the record formats.
 * Signal recovery, IDL packets, CRC, message framing, fragment reassembly:
   done.
 * Reuters pages and updates, headlines, GIS screens: done.
-* Packed records (type `50 30`): text fields are extracted, the numeric
-  fields and the record layout are not decoded yet. Contributions welcome.
+* Securities records (type `50 30`): decoded, except for two short codes
+  (type and status) whose meaning is unknown.
+* Control block (type `50 10`): content known, meaning unknown.
 
 ## Recordings
 
