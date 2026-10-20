@@ -203,6 +203,32 @@ maturities (e.g. 88/95) and certificate types. The numeric fields and the
 exact record layout have not been decoded; the decoder outputs the raw
 payload and the readable text fragments.
 
+### 6.4 Control block (`50 10`)
+
+A 100-byte binary record without any text, found in the recordings from
+July 1992, April 1992 and April 1993, but not in those from December 1993
+and January 1994. It is sent about every 205 seconds (median 5120 frames
+between copies) and has exactly the same content in every recording, over
+a period of a year. The few differing copies differ by one to three bits,
+which are bit errors left over from the CRC repair.
+
+```
+00  92 61 00 00 01 00 1c 84 98 00 00 00 00 00 08 00 07 99 00 00
+20  04 00 00 00 01 00 00 00 00 00 00 d0 04 00 00 00 00 00 00 00
+40  00 00 00 00 00 00 00 e0 01 00 af 00 00 01 00 00 00 00 95 00
+60  00 00 00 00 80 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+80  00 99 00 00 9a 00 00 00 00 00 00 00 00 00 5f 00 00 00 00 00
+```
+
+Mostly zero bytes with a few scattered values, it looks like a static
+configuration or parameter table of the receiving system (for example a
+service or channel table) that new receivers pick up after switching on.
+It contains no dates, counters or text, so its fields cannot be matched to
+anything else in the feed, and their meaning is not known.
+
+Other record types (`00 11`, `20 20`, ...) occur only a few times per
+recording and are most likely damaged records whose errors passed the CRC.
+
 ## 7. Identification
 
 Text found in the feed:

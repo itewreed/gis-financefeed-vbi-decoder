@@ -10,7 +10,7 @@ import numpy as np
 from . import decode, feed, idl, pages, wst
 from .vbi import BTTV_PAL, open_vbi
 
-RECORD_NAMES = {0x1010: "reuters", 0x1020: "gis", 0x5030: "packed"}
+RECORD_NAMES = {0x1010: "reuters", 0x1020: "gis", 0x5010: "control", 0x5030: "packed"}
 
 
 def frame_time(frame):

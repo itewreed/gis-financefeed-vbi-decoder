@@ -113,6 +113,9 @@ class PageStore:
             text = "\n".join(rows[:GIS_ROWS])
             self.gis[sid] = text
             return f"GIS screen {sid}", text
+        if rec.rtype == 0x5010:
+            dump = "\n".join(p[i:i + 20].hex(" ") for i in range(0, len(p), 20))
+            return f"control block (type 5010), {len(p)} bytes", dump
         if rec.rtype == 0x5030:
             frags = packed.text_fragments(p)
             return f"packed record, {len(p)} bytes", " | ".join(frags)
