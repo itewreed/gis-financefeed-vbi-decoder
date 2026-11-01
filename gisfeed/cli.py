@@ -9,7 +9,7 @@ import time
 import numpy as np
 
 from . import decode, feed, idl, packed, pages, wst
-from .vbi import BTTV_PAL, open_vbi
+from .vbi import open_capture
 
 RECORD_NAMES = {0x1010: "reuters", 0x1020: "gis", 0x5010: "control", 0x5030: "packed"}
 
@@ -54,8 +54,7 @@ def cmd_securities(args):
 
 
 def cmd_decode(args):
-    fmt = BTTV_PAL
-    frames = open_vbi(args.file, fmt)
+    frames, fmt = open_capture(args.file)
     os.makedirs(args.out, exist_ok=True)
     log = open(os.path.join(args.out, "summary.txt"), "w")
 
@@ -66,7 +65,7 @@ def cmd_decode(args):
         log.flush()
 
     say(f"file: {args.file}")
-    say(f"frames: {len(frames)} ({len(frames) / 25:.1f} s), format bttv PAL 2048 x u8, 16 lines per field")
+    say(f"frames: {len(frames)} ({len(frames) / 25:.1f} s), format {fmt.name}, {fmt.lines_per_field} lines per field")
     rows, ch, stats = decode.survey(frames, fmt)
     if args.rows:
         rows = [int(r) for r in args.rows.split(",")]

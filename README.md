@@ -71,16 +71,26 @@ or run it in place with `python3 -m gisfeed`.
 
 ## Input
 
-Raw VBI captures as written by Linux `bttv` style capture cards
-(Bt848/Bt878): per frame 32 lines (16 per field) of 2048 unsigned 8-bit
-samples at 35.468950 MHz, first field first, starting at TV line 7, as read
-from `/dev/vbi` of a bttv card. The lines carrying the feed are found
-automatically.
+Two kinds of captures are read:
+
+* **Raw VBI captures** (`.vbi`) as written by Linux `bttv` style capture
+  cards (Bt848/Bt878): per frame 32 lines (16 per field) of 2048 unsigned
+  8-bit samples at 35.468950 MHz, first field first, starting at TV line 7,
+  as read from `/dev/vbi`.
+* **Time base corrected luma** from
+  [vhs-decode](https://github.com/oyvindln/vhs-decode) or ld-decode
+  (`.tbcy`, or `.tbc` for composite/luma output): 16-bit fields of
+  1135 × 313 samples at 17.734475 MHz for PAL. The `.tbc.json` file next to
+  it must be present; it gives the field size, sample rate and field order.
+
+The file type is chosen by the extension. The lines carrying the feed are
+found automatically.
 
 ## Usage
 
 ```
 python3 -m gisfeed decode capture.vbi -o outdir
+python3 -m gisfeed decode capture.tbcy -o outdir
 ```
 
 `python3 -m gisfeed securities outdir` rebuilds the securities tables from

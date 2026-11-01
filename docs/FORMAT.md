@@ -16,6 +16,14 @@ The recordings were captured with a bttv (Bt848/Bt878) card:
 | lines per field | 16, TV lines 7–22 and 320–335 |
 | lines per frame | 32, first field first |
 
+The decoder also reads time base corrected luma files (`.tbcy`) from
+vhs-decode: 1135 samples per line at 17.734475 MHz (4 × fsc, 2.56 samples
+per bit), 16 bits, one field after the other, with the field order taken
+from the `.tbc.json` file. Line *k* of a field (counting from 0) is TV line
+*k* + 1. These are presented to the decoder as the same 32 rows (TV lines
+7–22 of both fields). All sample counts in the decoder are scaled with the
+sample rate.
+
 Row numbers in this document and in the decoder count from 0 within a frame
 (rows 0–15 first field, 16–31 second field). Row 0 is TV line 7; this is
 consistent with VPS appearing in row 9 (TV line 16) of the first field only.

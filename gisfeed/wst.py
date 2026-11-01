@@ -70,8 +70,11 @@ SYNC_BYTES = bytes([0x55, 0x55, 0x27, 0x9B, 0xEA])
 class LineSampler:
     """Normalises a line and samples it at the bit centres."""
 
-    def __init__(self, sample_rate, cutoff=3.5e6):
+    def __init__(self, sample_rate, cutoff=3.5e6, black_window=(0, 100)):
         self.spb = sample_rate / BIT_RATE
+        self.black_window = black_window
+        # sample counts below were chosen at 35.47 MHz (5.11 samples per bit)
+        self.scale = self.spb / (35.468950e6 / BIT_RATE)
         # The recording holds no signal above ~3.5 MHz, only noise: low-pass
         # filter the line before sampling it.
         n = np.arange(-24, 25)
@@ -82,7 +85,8 @@ class LineSampler:
         n = int(len(bits) * self.spb) + 1
         t = np.arange(n) / self.spb - 0.5
         wave = bits[np.clip(np.round(t).astype(int), 0, len(bits) - 1)]
-        k = np.arange(-8, 9)
+        half = max(2, int(round(8 * self.spb / 5.1127)))
+        k = np.arange(-half, half + 1)
         kern = np.exp(-0.5 * (k / (0.8 * self.spb)) ** 2)
         wave = np.convolve(wave, kern / kern.sum(), "same")
         self.template = wave - wave.mean()
@@ -90,12 +94,14 @@ class LineSampler:
     def find_start(self, x):
         """Sample position of the centre of the first run-in bit."""
         # the run-in shows up as a rise to mid level; search around that onset
-        sm = np.convolve(x, np.ones(9) / 9, "same")
-        above = np.nonzero(sm[:600] > 30)[0]
+        w = max(3, int(round(9 * self.scale)) | 1)
+        sm = np.convolve(x, np.ones(w) / w, "same")
+        above = np.nonzero(sm[:int(600 * self.scale)] > 30)[0]
         if not len(above):
             return None
         onset = above[0]
-        a, b = max(0, onset - 40), onset + 40
+        d = int(round(40 * self.scale))
+        a, b = max(0, onset - d), onset + d
         seg = x[a: b + len(self.template)]
         if len(seg) < len(self.template):
             return None
@@ -104,7 +110,8 @@ class LineSampler:
 
     def normalise(self, line):
         line = np.asarray(line, dtype=float)
-        black = np.median(line[:100])
+        a, b = self.black_window
+        black = np.median(line[a:b])
         top = np.percentile(line, 99)
         if top - black < 20:
             return None
@@ -117,7 +124,7 @@ class LineSampler:
         for thr in (25.0, 75.0):
             above = x > thr
             idx = np.nonzero(above[1:] != above[:-1])[0]
-            idx = idx[(idx > start + 80) & (idx < start + 1830)]
+            idx = idx[(idx > start + 16 * self.spb) & (idx < start + 358 * self.spb)]
             if len(idx):
                 t.append(idx + (thr - x[idx]) / (x[idx + 1] - x[idx]))
         if not t:
@@ -220,17 +227,24 @@ def mrag_errors(packet):
     return HAM84[packet[3]][1] + HAM84[packet[4]][1]
 
 
-def fit_header(samples, M=4):
+def fit_header(samples, M=4, rounds=3):
     """Channel estimate from lines assumed to start with FEED_HEADER.
 
-    Returns (taps, offset, rms residual)."""
+    Lines that do not fit (other signals on the same line, noise) are
+    dropped in a few rounds, keeping the better half each time.
+    Returns (taps, offset, rms residual of the kept lines)."""
     n = len(FEED_HEADER)
     bits = np.array(FEED_HEADER + [0] * (PACKET_BITS - n))
     X1 = design_matrix(bits, M)[:n - M]
-    X = np.concatenate([X1] * len(samples))
-    Y = np.concatenate([y[:n - M] for y in samples])
-    sol = np.linalg.lstsq(X, Y, rcond=None)[0]
-    res = float(np.sqrt(np.mean((X @ sol - Y) ** 2)))
+    Ys = np.array([y[:n - M] for y in samples])
+    keep = np.arange(len(Ys))
+    for r in range(rounds):
+        X = np.concatenate([X1] * len(keep))
+        sol = np.linalg.lstsq(X, Ys[keep].ravel(), rcond=None)[0]
+        per = np.sqrt(((Ys - X1 @ sol) ** 2).mean(1))
+        if r < rounds - 1 and len(keep) >= 10:
+            keep = np.argsort(per)[: max(5, len(keep) // 2)]
+    res = float(np.sqrt((per[keep] ** 2).mean()))
     return sol[:-1], sol[-1], res
 
 

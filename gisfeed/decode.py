@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import idl, wst
-from .vbi import BTTV_PAL, open_vbi
+from .vbi import BTTV_PAL, open_capture
 
 ACTIVE_STD = 15.0
 FEED_ROWS = (7, 8, 13, 14, 23, 24, 29, 30)  # TV lines 14, 15, 20, 21, 327, 328, 333, 334  # raw sample std above which a line is considered to carry data
@@ -46,7 +46,7 @@ def survey(frames, fmt, lines_per_row=60, scan_frames=8000):
     4. refits the channel from the packets that passed (twice).
 
     Returns (rows, channel, {row: (lines decoded, CRC ok)})."""
-    sampler = wst.LineSampler(fmt.sample_rate)
+    sampler = wst.LineSampler(fmt.sample_rate, black_window=fmt.black_window)
     n = len(frames)
     picks = np.unique(np.linspace(0, n - 1, min(n, scan_frames)).astype(int))
     pool = {r: [] for r in range(fmt.lines_per_frame)}
@@ -120,10 +120,10 @@ _G = {}
 
 
 def _init(path, fmt, rows, taps, offset, shifts):
-    _G["frames"] = open_vbi(path, fmt)
+    _G["frames"] = open_capture(path)[0]
     _G["rows"] = rows
     _G["ch"] = Channel(np.asarray(taps), offset, shifts)
-    _G["sampler"] = wst.LineSampler(fmt.sample_rate)
+    _G["sampler"] = wst.LineSampler(fmt.sample_rate, black_window=fmt.black_window)
 
 
 def _work(rng):
@@ -140,7 +140,7 @@ def _work(rng):
 def decode_file(path, rows, ch, fmt=BTTV_PAL, start=0, stop=None, workers=None,
                 chunk=200, progress=None):
     """Decodes all lines in rows. Returns list of (frame, row, 45-byte packet, addr errors)."""
-    n = len(open_vbi(path, fmt))
+    n = len(open_capture(path)[0])
     stop = n if stop is None else min(stop, n)
     ranges = [(a, min(a + chunk, stop)) for a in range(start, stop, chunk)]
     out = []
